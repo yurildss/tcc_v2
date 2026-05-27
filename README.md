@@ -644,3 +644,64 @@ seaborn
 *TCC — Classificação de Arritmias Cardíacas via TinyML no ESP32*  
 *Dataset: MIT-BIH Arrhythmia Database — PhysioNet*  
 *Documentação gerada em Maio 2026*
+
+---
+
+## Repositório — Layout e Quickstart (reorganização modular)
+
+### Estrutura de diretórios
+
+- `src/` — código-fonte modular do pipeline
+  - `src/data/` — ingestão, preparação, aumento e divisão (`ingest.py`, `prepare.py`, `augment.py`, `split.py`)
+  - `src/features/` — extração de features (`extract.py`)
+  - `src/models/` — pipelines e treinos (`pipeline_kan.py`, `train_custom.py`, `benchmark.py`)
+  - `src/export/` — geradores de headers e utilitários de exportação (`export_kan_cpp.py`, `export_all_esp32.py`, `generate_scaler_h.py`)
+- `data/raw/` — dados brutos do MIT-BIH (mitbih/, mit-bih-arrhythmia-database-1.0.0/, CSVs originais)
+- `data/processed/` — dados processados gerados pelo pipeline (cut_beats, augmented, split)
+- `notebooks/` — notebooks Jupyter do projeto (TCC_KAN.ipynb)
+- `firmware/generated_headers/` — destino padrão para arquivos `.h` gerados (scaler.h, dataset.h, kan_model.h, etc.)
+- `scripts/` — wrappers executáveis para os módulos (wrap_ingest.py, wrap_prepare.py, wrap_augment.py, wrap_split.py, wrap_pipeline_kan.py, wrap_train.py, wrap_export.py) e run_pipeline.sh
+- `requirements.txt` — dependências do projeto
+- `config.yaml` — caminhos e parâmetros globais
+
+### Quickstart — executar o pipeline completo
+
+1. **Instale as dependências** (recomendado em virtualenv/venv):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. **Execute o pipeline completo:**
+
+```bash
+bash scripts/run_pipeline.sh
+```
+
+3. **Ou execute etapas separadas** com os wrappers individuais:
+
+```bash
+python3 scripts/wrap_ingest.py       # Ingest: baixa MIT-BIH e processa CSVs
+python3 scripts/wrap_prepare.py      # Prepare: corta batimentos
+python3 scripts/wrap_augment.py      # Augment: balanceia classes
+python3 scripts/wrap_split.py        # Split: divide train/val/test por paciente
+python3 scripts/wrap_pipeline_kan.py # Build dataset, cria modelo KAN
+python3 scripts/wrap_train.py        # Train: loop PyTorch com loss customizada
+python3 scripts/wrap_export.py       # Export: gera headers C++ para ESP32
+```
+
+### Notas importantes
+
+- Os wrappers em `scripts/` usam `runpy` para executar os arquivos em `src/` sem modificar o código-fonte.
+- Se estiver trabalhando no Jupyter, importe diretamente: `from src.data.ingest import *` ou use `exec(open('src/...')).read())`.
+- Os dados brutos em `data/raw/` são copiados automaticamente pelo `wrap_ingest.py` na primeira execução.
+- Dados aumentados (`data/processed/augmented/`) **nunca** aparecem em val/test — apenas em train.
+
+### Próximos passos
+
+- Implementar `verify_export()` completo com verificação De Boor numérica em `src/export/export_kan_cpp.py`.
+- Adicionar testes unitários para validar cada etapa do pipeline.
+- Configurar CI/CD (GitHub Actions) para rodar o pipeline automaticamente.
+
