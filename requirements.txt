@@ -1,0 +1,12 @@
+torch>=2.0
+numpy
+pandas
+scipy
+PyWavelets
+scikit-learn
+xgboost
+micromlgen
+joblib
+matplotlib
+seaborn
+git+https://github.com/KindXiaoming/pykan
