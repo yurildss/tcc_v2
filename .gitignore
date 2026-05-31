@@ -1,0 +1,33 @@
+batimentos_filtrados.csv
+mitbih_all_records_renumerada.csv
+mitbih_all_records.csv
+*:Zone.Identifier
+
+# Legacy scripts (moved to src/)
+cortar_batimentos.py
+augmentation_ecg.py
+split_dataset.py
+features_estruturais.py
+kolmo_corrigido.py
+treino_customizado_3.py
+benchmark_modelos*.py
+exportar_kan_cpp.py
+exportar_todos_esp32.py
+gerar_scaler_h.py
+gerar_dataset_h.py
+baixar_data_set_rotular_limpar.py
+
+# Data & artifacts
+data/raw/
+benchmark_resultados/
+model/
+ArduinoCode/*.pt
+ArduinoCode/*.h
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+
