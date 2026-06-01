@@ -370,7 +370,9 @@ Bloco 11 — Skew/Kurt por segmento [43-45]
 As KANs diferem das MLPs tradicionais: em vez de funções de ativação fixas nos nós, as KANs aprendem funções B-spline nas arestas. Para ECG, isso traz duas vantagens práticas importantes:
 
 1. **Interpretabilidade**: é possível visualizar exatamente como cada feature contribui para cada classe
-2. **Exportabilidade**: B-splines têm coeficientes explícitos, exportáveis para C++ sem biblioteca de deep learning
+2. **Exportabilidade**: B-splines têm coeficientes explícitos, exportáveis para C++ sem biblioteca de deep learning. E o tamanho do modelo exportado pela KAN é MUITO menor se comparado com os outros modelos testados.
+
+![alt text](image-6.png)
 
 **Arquitetura:**
 
@@ -506,20 +508,17 @@ Para **validação do modelo no hardware**, as features são pré-computadas em 
 
 ## 12. Resultados
 
-### Melhor resultado (KAN — Python)
+![alt text](image.png)
 
-| Classe | Precisão | Recall | F1 | FN |
-|--------|----------|--------|----|----|
-| A | 85.6% | 83.0% | 84.3% | 26 |
-| B | 90.3% | 93.0% | 91.6% | 21 |
-| F | 93.7% | 89.0% | 91.3% | 13 |
-| L | 95.5% | 84.0% | 89.4% | 11 |
-| N | 94.1% | 95.0% | 94.5% | 4 |
-| R | 66.7% | 88.0% | 75.9% | 12 |
-| V | 92.2% | 83.0% | 87.4% | 8 |
-| f | 74.8% | 86.0% | 80.0% | 14 |
-| **Macro** | **88.8%** | **87.8%** | **88.0%** | — |
+![alt text](image-1.png)
 
+![alt text](image-2.png)
+
+![alt text](image-3.png)
+
+![alt text](image-4.png)
+
+![alt text](image-5.png)
 ### Evolução da acurácia no ESP32
 
 | Versão | Abordagem | Python | ESP32 | Divergência |
@@ -531,7 +530,7 @@ A diferença de 75 pontos percentuais entre Python e ESP32 na v1 foi o maior apr
 
 ---
 
-## 13. Problemas Encontrados e Soluções
+## 13. Problemas Encontrados e Soluções (retirar)
 
 | Problema | Causa Raiz | Solução |
 |----------|------------|---------|
