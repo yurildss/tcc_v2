@@ -14,7 +14,7 @@ from src.models.pipeline_kan import model, X_train_t, y_train_t, X_val_t, y_val_
 # HYPERPARAMS (kept as in original)
 # =============================================================================
 
-EPOCHS           = 150
+EPOCHS           = 120
 BATCH_SIZE       = 512
 LR               = 1e-3
 LR_PATIENCE      = 30
