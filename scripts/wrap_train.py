@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""Wrapper to run src/models/train_custom.py as a script."""
+
+import sys
 import runpy
 from pathlib import Path
 
-runpy.run_path(Path(__file__).resolve().parents[1] / 'src' / 'models' / 'train_custom.py', run_name='__main__')
+ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+runpy.run_module(
+    "src.models.train_custom",
+    run_name="__main__",
+)
