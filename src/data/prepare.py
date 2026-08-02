@@ -32,7 +32,7 @@ from collections import defaultdict
 # CONFIGURAÇÕES
 # =============================================================================
 
-CSV_FILE     = "mitbih_all_records_renumerada.csv"
+CSV_FILE     = "data/raw/mitbih_all_records_renumerada.csv"
 OUTPUT_DIR   = "data/processed/cut_beats"
 
 # Classes de interesse — apenas essas serão salvas como batimentos centrais
