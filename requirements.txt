@@ -9,4 +9,5 @@ micromlgen
 joblib
 matplotlib
 seaborn
+wfdb
 git+https://github.com/KindXiaoming/pykan
