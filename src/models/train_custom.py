@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
-
+from sklearn.metrics import classification_report
 from src.models.pipeline_kan import model, X_train_t, y_train_t, X_val_t, y_val_t, encoder, class_names, num_classes
 
 # =============================================================================
@@ -267,8 +267,14 @@ y_pred_labels = encoder.inverse_transform(y_pred_idx)
 print("\n" + "=" * 65)
 print("RELATÓRIO FINAL — CONJUNTO DE VALIDAÇÃO")
 print("=" * 65)
-print(classification_report(y_val, y_pred_labels, target_names=class_names, digits=4))
+y_true_labels = encoder.inverse_transform(y_val.numpy())
 
+print(classification_report(
+    y_true_labels,
+    y_pred_labels,
+    target_names=class_names,
+    digits=4
+))
 fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 fig.suptitle("Treino Customizado — KAN ECG (foco em redução de FN)", fontsize=13)
 
