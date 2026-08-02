@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""Wrapper to run src/models/pipeline_kan.py as a script."""
+
 import runpy
+import sys
 from pathlib import Path
 
-runpy.run_path(Path(__file__).resolve().parents[1] / 'src' / 'models' / 'pipeline_kan.py', run_name='__main__')
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+runpy.run_module(
+    "src.models.pipeline_kan",
+    run_name="__main__",
+)
