@@ -267,7 +267,7 @@ y_pred_labels = encoder.inverse_transform(y_pred_idx)
 print("\n" + "=" * 65)
 print("RELATÓRIO FINAL — CONJUNTO DE VALIDAÇÃO")
 print("=" * 65)
-y_true_labels = encoder.inverse_transform(y_val.numpy())
+y_true_labels = encoder.inverse_transform(y_val_t.numpy())
 
 print(classification_report(
     y_true_labels,
