@@ -20,6 +20,9 @@ python3 scripts/wrap_pipeline_kan.py
 echo "6/7 - Train (KAN)"
 python3 scripts/wrap_train.py
 
+echo "6.5/7 - Treinando Benchmark (CNN1D, LSTM, RF, XGBoost)"
+python3 src/models/benchmark.py
+
 echo "7/7 - Export headers"
 python3 scripts/wrap_export.py
 
