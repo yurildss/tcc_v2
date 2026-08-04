@@ -1,0 +1,24 @@
+name: Executar Pipeline no Kaggle
+
+on:
+  push:
+    branches:
+      - main  # A automação roda toda vez que você atualizar a main
+
+jobs:
+  update-kaggle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v3
+
+      - name: Instalar a API do Kaggle
+        run: pip install kaggle
+
+      - name: Enviar e Rodar o Notebook no Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          # O comando abaixo empurra o notebook e força a execução
+          kaggle kernels push -p ./notebooks/

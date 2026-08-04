@@ -1,0 +1,13 @@
+{
+  "id": "yurildss/notebookb25034ad4d",
+  "title": "TCC - KAN Edge AI",
+  "code_file": "play.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "true",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}
