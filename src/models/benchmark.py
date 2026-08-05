@@ -130,8 +130,14 @@ def train_pytorch_model(model, X_train, y_train, X_val, y_val, model_name, epoch
             
         model.eval()
         with torch.no_grad():
-            vout = model(val_x_t)
-            vloss = criterion(vout, val_y_t).item()
+            vloss_total = 0
+            n_batches_val = 0
+            for i in range(0, len(val_x_t), batch_size):
+                vxb = val_x_t[i:i+batch_size].to(device)
+                vyb = val_y_t[i:i+batch_size].to(device)
+                vloss_total += criterion(model(vxb), vyb).item()
+                n_batches_val += 1
+            vloss = vloss_total / n_batches_val
             if vloss < best_loss:
                 best_loss = vloss
                 best_state = model.state_dict()
@@ -147,6 +153,15 @@ def train_pytorch_model(model, X_train, y_train, X_val, y_val, model_name, epoch
     save_path = os.path.join(OUTPUT_DIR, f"{model_name.lower()}.pt")
     torch.save(model.state_dict(), save_path)
     return model, t_train, save_path
+
+def inferencia_batches(model, X, batch_size=128):
+    model.eval()
+    preds = []
+    with torch.no_grad():
+        for i in range(0, len(X), batch_size):
+            batch = torch.tensor(X[i:i+batch_size], dtype=torch.float32).to(device)
+            preds.append(torch.argmax(model(batch), dim=1).cpu())
+    return torch.cat(preds).numpy()
 
 # =============================================================================
 # 4. EXECUÇÃO PRINCIPAL
@@ -213,7 +228,8 @@ def main():
     if HAS_KAN and os.path.exists(KAN_STATE_PATH):
         print("\n[KAN] A carregar modelo treinado...")
         try:
-            kan_model = KAN(width=[input_length, 16, num_classes], grid=5, k=3, device=device)
+            kan_model = KAN(width=[input_length, 32, 16, num_classes], grid=5, k=3)
+            kan_model = kan_model.to(device)
             kan_model.load_state_dict(torch.load(KAN_STATE_PATH, map_location=device))
             kan_model.eval()
 
@@ -262,7 +278,7 @@ def main():
     t0 = time.time()
     cnn.eval()
     with torch.no_grad():
-        preds_cnn = torch.argmax(cnn(torch.tensor(X_test, dtype=torch.float32).to(device)), dim=1).cpu().numpy()
+        preds_cnn = inferencia_batches(cnn, X_test)
     t_inf_cnn = time.time() - t0
     registrar_modelo("CNN1D", y_test, preds_cnn, t_inf_cnn, cnn_path)
 
@@ -273,7 +289,7 @@ def main():
     t0 = time.time()
     lstm.eval()
     with torch.no_grad():
-        preds_lstm = torch.argmax(lstm(torch.tensor(X_test, dtype=torch.float32).to(device)), dim=1).cpu().numpy()
+        preds_lstm = inferencia_batches(lstm, X_test)
     t_inf_lstm = time.time() - t0
     registrar_modelo("LSTM", y_test, preds_lstm, t_inf_lstm, lstm_path)
 

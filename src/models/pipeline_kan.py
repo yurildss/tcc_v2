@@ -121,6 +121,24 @@ dataset = {
     'test_label':  y_val_t,
 }
 
+# Salva arrays .npy para o benchmark.py consumir
+import numpy as np
+
+npy_dir = DATASET_ROOT
+os.makedirs(npy_dir, exist_ok=True)
+
+np.save(os.path.join(npy_dir, "X_train.npy"), X_train_scaled)
+np.save(os.path.join(npy_dir, "y_train.npy"), y_train_enc)
+np.save(os.path.join(npy_dir, "X_val.npy"),   X_val_scaled)
+np.save(os.path.join(npy_dir, "y_val.npy"),   y_val_enc)
+np.save(os.path.join(npy_dir, "X_test.npy"),  X_test_scaled)
+np.save(os.path.join(npy_dir, "y_test.npy"),  y_test_enc)
+
+print(f"\nArrays .npy salvos em {npy_dir}/")
+print(f"  X_train : {X_train_scaled.shape}")
+print(f"  X_val   : {X_val_scaled.shape}")
+print(f"  X_test  : {X_test_scaled.shape}")
+
 print("\nModelo criado. Execute src/models/train_custom.py para treinar.")
 print("Variaveis disponiveis no escopo:")
 print("  model, dataset, encoder, scaler, class_names, num_classes")
