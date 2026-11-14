@@ -65,9 +65,9 @@ A [MIT-BIH Arrhythmia Database](https://physionet.org/content/mitdb/1.0.0/) é a
 | L | Bloqueio de Ramo Esquerdo (LBBB) | 8.075 |
 | R | Bloqueio de Ramo Direito (RBBB) | 7.259 |
 | V | Batimento Prematuro Ventricular | 7.130 |
-| / | Bundle Branch Bigeminy | 7.028 |
+| / | Batimento de marcapasso | 7.028 |
 | A | Fibrilação Atrial / Batimento Prematuro Atrial | 2.546 |
-| f | Flutter / Fibrilação Atrial | 982 |
+| f | Fusão de batimento normal e marcapasso | 982 |
 | F | Fusão Ventricular-Normal | 803 |
 | Q | Batimento de Pacemaker | 33 |
 | S | Batimento Supraventricular | 2 |
