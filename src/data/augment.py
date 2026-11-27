@@ -12,8 +12,10 @@ from collections import defaultdict
 # CONFIGURAÇÕES
 # =============================================================================
 
-INPUT_DIR  = "data/processed/cut_beats"
-OUTPUT_DIR = "data/processed/augmented"
+# Roda DEPOIS do split: lê apenas os originais dos registros de TREINO.
+# Val e test nunca passam por aqui.
+INPUT_DIR  = "data/processed/train_orig"
+OUTPUT_DIR = "data/processed/split/train"
 SEED       = 42
 FS         = 360
 
@@ -136,6 +138,8 @@ def carregar_originais(classe):
 random.seed(SEED)
 np.random.seed(SEED)
 
+if os.path.exists(OUTPUT_DIR):
+    shutil.rmtree(OUTPUT_DIR)   # evita misturar com execuções anteriores
 for cls in METAS:
     os.makedirs(os.path.join(OUTPUT_DIR, cls), exist_ok=True)
 
@@ -214,7 +218,9 @@ for cls in sorted(METAS.keys()):
 
         # Nome do arquivo com técnicas usadas no nome para rastreabilidade
         tec_tag  = '_'.join(tecnicas_usadas)
-        fname    = f"{cls}_aug_{tec_tag}_{aug_gerado + 1}.csv"
+        # Registro de origem no nome -> rastreabilidade e checagem de vazamento
+        src_rec  = item['fname'].rsplit('_', 2)[-2]   # ..._<record>_labeled.csv
+        fname    = f"{cls}_aug_{tec_tag}_{aug_gerado + 1}_src{src_rec}.csv"
         df_aug.to_csv(os.path.join(out_path, fname), index=False)
 
         for t in tecnicas_usadas:

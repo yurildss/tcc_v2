@@ -8,11 +8,11 @@ python3 scripts/wrap_ingest.py
 echo "2/7 - Prepare: cortar batimentos"
 python3 scripts/wrap_prepare.py
 
-echo "3/7 - Augment"
-python3 scripts/wrap_augment.py
-
-echo "4/7 - Split"
+echo "3/7 - Split inter-paciente (antes do augmentation)"
 python3 scripts/wrap_split.py
+
+echo "4/7 - Augment (somente treino)"
+python3 scripts/wrap_augment.py
 
 echo "5/7 - Extract + build pipeline"
 python3 scripts/wrap_pipeline_kan.py

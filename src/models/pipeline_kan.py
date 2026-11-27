@@ -25,6 +25,7 @@ N_FEATURES = 46
 def build_dataset(root_dir, fs=FS):
     X, y = [], []
     skipped = 0
+    erros = []
 
     for class_name in sorted(os.listdir(root_dir)):
         class_path = os.path.join(root_dir, class_name)
@@ -46,15 +47,24 @@ def build_dataset(root_dir, fs=FS):
                 X.append(feat)
                 y.append(class_name)
                 loaded += 1
-            except Exception:
+            except Exception as e:
                 skipped += 1
+                if len(erros) < 5:
+                    erros.append(f"{file}: {e}")
 
         print(f"  {class_name}: {loaded} amostras")
 
     if skipped > 0:
         print(f"  (ignorados: {skipped} arquivos)")
+        for e in erros:
+            print(f"    ex.: {e}")
 
-    return np.array(X, dtype=np.float32), np.array(y)
+    X = np.array(X, dtype=np.float32)
+    # Uma única linha com NaN/inf contamina todos os pesos do KAN no 1º batch
+    assert np.isfinite(X).all(), (
+        f"{(~np.isfinite(X)).any(axis=1).sum()} amostras com features não finitas em {root_dir}"
+    )
+    return X, np.array(y)
 
 
 DATASET_ROOT = "data/processed/split"

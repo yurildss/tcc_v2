@@ -4,7 +4,27 @@
 import numpy as np
 import pandas as pd
 import pywt
-from scipy.stats import skew, kurtosis
+from scipy.stats import skew as _scipy_skew, kurtosis as _scipy_kurtosis
+
+
+# Segmentos (quase) constantes fazem skew/kurtosis do scipy devolverem NaN
+# ou valores sem sentido (cancelamento catastrófico). Por convenção, a
+# distribuição de um segmento constante tem assimetria e curtose em excesso = 0.
+_STD_MIN = 1e-6   # mV — muito abaixo da resolução do MIT-BIH (0,005 mV)
+
+def skew(x):
+    x = np.asarray(x, dtype=np.float64)
+    if np.std(x) < _STD_MIN:
+        return 0.0
+    v = _scipy_skew(x)
+    return float(v) if np.isfinite(v) else 0.0
+
+def kurtosis(x):
+    x = np.asarray(x, dtype=np.float64)
+    if np.std(x) < _STD_MIN:
+        return 0.0
+    v = _scipy_kurtosis(x)
+    return float(v) if np.isfinite(v) else 0.0
 from scipy.fft import rfft, rfftfreq
 
 FS = 360  # frequência de amostragem em Hz
@@ -177,6 +197,9 @@ def extract_features(signal_data, fs=FS):
     features.append(float(kurtosis(cen_seg)) if len(cen_seg)  > 5 else 0.0)
 
     assert len(features) == 46, f"Esperado 46 features, obtido {len(features)}"
+    nao_finitas = [i for i, v in enumerate(features) if not np.isfinite(v)]
+    if nao_finitas:
+        raise ValueError(f"Features não finitas nos índices {nao_finitas}")
     return features
 
 

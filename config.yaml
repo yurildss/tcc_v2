@@ -2,11 +2,10 @@ data:
   raw: data/raw
   processed:
     cut: data/processed/cut_beats
-    augmented: data/processed/augmented
+    train_orig: data/processed/train_orig
     split: data/processed/split
 firmware:
   headers: firmware/generated_headers
 pipeline:
-  train_ratio: 0.7
-  val_ratio: 0.15
-  test_ratio: 0.15
+  split_protocol: inter-patient (DS1+104,107 / DS2+102,217)
+  val_ratio: 0.15   # hold-out dos originais de treino
