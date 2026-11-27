@@ -3,22 +3,78 @@ name: Executar Pipeline no Kaggle
 on:
   push:
     branches:
-      - main  # A automação roda toda vez que você atualizar a main
+      - '**'              # qualquer branch
+    paths-ignore:         # não gasta execução no Kaggle por mudanças só de documentação
+      - '**.md'
+      - '**.png'
+  workflow_dispatch:      # permite rodar manualmente pela aba Actions, escolhendo a branch
+
+# Um notebook do Kaggle por branch: se chegar um push novo na mesma branch
+# enquanto o anterior ainda está sendo enviado, o envio antigo é cancelado.
+concurrency:
+  group: kaggle-pipeline-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   update-kaggle:
     runs-on: ubuntu-latest
     steps:
       - name: Baixar o código do repositório
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Instalar a API do Kaggle
         run: pip install kaggle
+
+      - name: Apontar o notebook para a branch e o commit deste push
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          path = "notebooks/play.ipynb"
+          branch, sha = os.environ["BRANCH"], os.environ["SHA"]
+          old = "git clone https://github.com/yurildss/tcc_v2.git /kaggle/working/tcc_v2"
+          new = (f"git clone --branch '{branch}' --single-branch "
+                 f"https://github.com/yurildss/tcc_v2.git /kaggle/working/tcc_v2 "
+                 f"&& git -C /kaggle/working/tcc_v2 checkout {sha}")
+          nb = json.load(open(path))
+          trocas = 0
+          for cell in nb["cells"]:
+              src = "".join(cell["source"])
+              if old in src:
+                  cell["source"] = src.replace(old, new).splitlines(keepends=True)
+                  trocas += 1
+          assert trocas == 1, "Linha do git clone não encontrada em play.ipynb"
+          json.dump(nb, open(path, "w"), indent=1)
+          print(f"Kaggle vai rodar: branch={branch} commit={sha[:7]}")
+          EOF
+
+      - name: Escolher o notebook do Kaggle (um por branch)
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, re
+          path = "notebooks/kernel-metadata.json"
+          meta = json.load(open(path))
+          branch = os.environ["BRANCH"]
+          if branch != "main":
+              # main mantém o notebook original; as outras branches ganham um notebook
+              # próprio, criado automaticamente no primeiro push.
+              # O Kaggle exige que o id seja o título em formato slug (minúsculas e hífens).
+              slug = re.sub(r"[^a-z0-9]+", "-", branch.lower()).strip("-")
+              title = f"tcc-v2-{slug}"[:50].rstrip("-")
+              user = meta["id"].split("/")[0]
+              meta["id"], meta["title"] = f"{user}/{title}", title
+          json.dump(meta, open(path, "w"), indent=2)
+          print(f"Notebook no Kaggle: https://www.kaggle.com/code/{meta['id']}")
+          EOF
 
       - name: Enviar e Rodar o Notebook no Kaggle
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
-          # O comando abaixo empurra o notebook e força a execução
+          # Empurra o notebook (já apontado para a branch certa) e força a execução
           kaggle kernels push -p ./notebooks/
