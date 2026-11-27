@@ -18,6 +18,10 @@ concurrency:
 jobs:
   update-kaggle:
     runs-on: ubuntu-latest
+    timeout-minutes: 350        # limite do GitHub é 6 h por job
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
     steps:
       - name: Baixar o código do repositório
         uses: actions/checkout@v4
@@ -46,6 +50,27 @@ jobs:
                   cell["source"] = src.replace(old, new).splitlines(keepends=True)
                   trocas += 1
           assert trocas == 1, "Linha do git clone não encontrada em play.ipynb"
+
+          # Um "!comando" que falha NÃO interrompe o notebook: o Kaggle marcaria
+          # a execução como concluída mesmo com o pipeline quebrado. Aqui o
+          # código de saída é guardado e vira uma exceção (status "error").
+          # A pasta data/ (~110 mil CSVs) é apagada para a saída ficar pequena.
+          run_old = "!bash scripts/run_pipeline.sh"
+          run_new = (
+              "!bash scripts/run_pipeline.sh; echo $? > /tmp/pipeline_rc\n"
+              "import shutil\n"
+              "shutil.rmtree('data', ignore_errors=True)\n"
+              "rc = int(open('/tmp/pipeline_rc').read())\n"
+              "if rc != 0:\n"
+              "    raise RuntimeError(f'Pipeline falhou com código {rc}')\n"
+          )
+          trocas = 0
+          for cell in nb["cells"]:
+              src = "".join(cell["source"])
+              if run_old in src:
+                  cell["source"] = src.replace(run_old, run_new).splitlines(keepends=True)
+                  trocas += 1
+          assert trocas == 1, "Comando do pipeline não encontrado em play.ipynb"
           json.dump(nb, open(path, "w"), indent=1)
           print(f"Kaggle vai rodar: branch={branch} commit={sha[:7]}")
           EOF
@@ -68,13 +93,34 @@ jobs:
               user = meta["id"].split("/")[0]
               meta["id"], meta["title"] = f"{user}/{title}", title
           json.dump(meta, open(path, "w"), indent=2)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"KERNEL_ID={meta['id']}\n")
           print(f"Notebook no Kaggle: https://www.kaggle.com/code/{meta['id']}")
           EOF
 
       - name: Enviar e Rodar o Notebook no Kaggle
-        env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        id: push
         run: |
           # Empurra o notebook (já apontado para a branch certa) e força a execução
           kaggle kernels push -p ./notebooks/
+
+      - name: Aguardar a execução no Kaggle
+        id: wait
+        run: python3 .github/scripts/kaggle_wait.py "$KERNEL_ID" 60
+
+      - name: Baixar log e resultados do Kaggle
+        if: always() && steps.push.outcome == 'success'
+        run: kaggle kernels output "$KERNEL_ID" -p kaggle_output || echo "::warning::Não foi possível baixar a saída"
+
+      - name: Resumo do run
+        if: always() && steps.push.outcome == 'success'
+        run: python3 .github/scripts/kaggle_summary.py kaggle_output "$KERNEL_ID" "${{ steps.wait.outcome }}"
+
+      - name: Anexar resultados ao run
+        if: always() && steps.push.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-output
+          path: kaggle_output/
+          retention-days: 30
+          if-no-files-found: warn
