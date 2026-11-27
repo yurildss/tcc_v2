@@ -1,0 +1,82 @@
+diff --git a/src/features/extract.py b/src/features/extract.py
+index 3aec2b2..a7028d8 100644
+--- a/src/features/extract.py
++++ b/src/features/extract.py
+@@ -4,7 +4,27 @@
+ import numpy as np
+ import pandas as pd
+ import pywt
+-from scipy.stats import skew, kurtosis
++from scipy.stats import skew as _scipy_skew, kurtosis as _scipy_kurtosis
++
++
++# Segmentos (quase) constantes fazem skew/kurtosis do scipy devolverem NaN
++# ou valores sem sentido (cancelamento catastrófico). Por convenção, a
++# distribuição de um segmento constante tem assimetria e curtose em excesso = 0.
++_STD_MIN = 1e-6   # mV — muito abaixo da resolução do MIT-BIH (0,005 mV)
++
++def skew(x):
++    x = np.asarray(x, dtype=np.float64)
++    if np.std(x) < _STD_MIN:
++        return 0.0
++    v = _scipy_skew(x)
++    return float(v) if np.isfinite(v) else 0.0
++
++def kurtosis(x):
++    x = np.asarray(x, dtype=np.float64)
++    if np.std(x) < _STD_MIN:
++        return 0.0
++    v = _scipy_kurtosis(x)
++    return float(v) if np.isfinite(v) else 0.0
+ from scipy.fft import rfft, rfftfreq
+ 
+ FS = 360  # frequência de amostragem em Hz
+@@ -177,6 +197,9 @@ def extract_features(signal_data, fs=FS):
+     features.append(float(kurtosis(cen_seg)) if len(cen_seg)  > 5 else 0.0)
+ 
+     assert len(features) == 46, f"Esperado 46 features, obtido {len(features)}"
++    nao_finitas = [i for i, v in enumerate(features) if not np.isfinite(v)]
++    if nao_finitas:
++        raise ValueError(f"Features não finitas nos índices {nao_finitas}")
+     return features
+ 
+ 
+diff --git a/src/models/pipeline_kan.py b/src/models/pipeline_kan.py
+index 2ef2bfd..ccd1e2c 100644
+--- a/src/models/pipeline_kan.py
++++ b/src/models/pipeline_kan.py
+@@ -25,6 +25,7 @@ N_FEATURES = 46
+ def build_dataset(root_dir, fs=FS):
+     X, y = [], []
+     skipped = 0
++    erros = []
+ 
+     for class_name in sorted(os.listdir(root_dir)):
+         class_path = os.path.join(root_dir, class_name)
+@@ -46,15 +47,24 @@ def build_dataset(root_dir, fs=FS):
+                 X.append(feat)
+                 y.append(class_name)
+                 loaded += 1
+-            except Exception:
++            except Exception as e:
+                 skipped += 1
++                if len(erros) < 5:
++                    erros.append(f"{file}: {e}")
+ 
+         print(f"  {class_name}: {loaded} amostras")
+ 
+     if skipped > 0:
+         print(f"  (ignorados: {skipped} arquivos)")
++        for e in erros:
++            print(f"    ex.: {e}")
+ 
+-    return np.array(X, dtype=np.float32), np.array(y)
++    X = np.array(X, dtype=np.float32)
++    # Uma única linha com NaN/inf contamina todos os pesos do KAN no 1º batch
++    assert np.isfinite(X).all(), (
++        f"{(~np.isfinite(X)).any(axis=1).sum()} amostras com features não finitas em {root_dir}"
++    )
++    return X, np.array(y)
+ 
+ 
+ DATASET_ROOT = "data/processed/split"
