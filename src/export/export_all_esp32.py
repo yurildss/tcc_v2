@@ -193,7 +193,7 @@ def main():
                                     output=os.path.join(HEADERS_DIR, "dataset.h"))
 
     # ---- KAN (modelo principal do TCC: falha aqui interrompe o pipeline)
-    titulo("Exportando KAN (De Boor numérico)")
+    titulo("Exportando KAN (B-splines numéricas, espelho exato do pykan)")
     width = [X_test.shape[1]] + KAN_WIDTH_OCULTAS + [len(class_names)]
     model = KAN(width=width, grid=KAN_GRID, k=KAN_K)
     model.load_state_dict(torch.load(KAN_STATE_PATH, map_location="cpu"))

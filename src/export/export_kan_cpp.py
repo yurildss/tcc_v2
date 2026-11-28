@@ -2,8 +2,14 @@
 # src/export/export_kan_cpp.py
 # =============================================================================
 # Exporta um MultKAN (pykan) treinado para C++ (ESP32) avaliando as B-splines
-# numericamente (De Boor) — sem prune() nem auto_symbolic(), que derrubavam a
-# acurácia no dispositivo.
+# numericamente — sem prune() nem auto_symbolic(), que derrubavam a acurácia
+# no dispositivo.
+#
+# As bases B-spline são calculadas pela recursão de Cox–de Boor sobre o grid
+# estendido inteiro, exatamente como kan/spline.py (B_batch): sem prender x ao
+# domínio do grid; fora dele a parte spline vale 0. Isso dá concordância de
+# 100% entre PyTorch e C++ (a versão com clamp + De Boor divergia quando
+# alguma entrada caía fora do grid).
 #
 # Restaurado da versão original (exportar_kan_cpp.py, commit 123a194): a cópia
 # em src/ tinha virado um stub sem o forward pass em C++ nem a verificação.
@@ -218,49 +224,38 @@ def export_kan_to_cpp(model, output_path="firmware/generated_headers/kan_model.h
         lines.append(
             f"const float {pg}L{l_idx}_BIAS[{n_out}] = {{ {fmt_row(ld['node_bias'])} }};\n")
 
-    # --- Algoritmo de De Boor para avaliação de B-spline ---
+    # --- Bases B-spline exatamente como o pykan (kan/spline.py: B_batch) ---
+    # Cox–de Boor sobre o grid ESTENDIDO inteiro, sem prender x ao domínio:
+    # fora de [knots[0], knots[n-1]) todas as bases valem 0 e só sobra a
+    # parte SiLU — igual ao PyTorch. (A versão anterior prendia x ao domínio
+    # útil do grid, o que divergia do PyTorch para entradas fora dele.)
+    max_coef  = max(ld['n_coef'] for ld in layers_data)
+    max_knots = max(ld['n_knots'] for ld in layers_data)
     lines += [
         "// =========================================================================",
-        "// bspline_eval — algoritmo de De Boor",
-        "// Avalia a B-spline de ordem k no ponto x, dados knots e coeficientes.",
+        "// kan_bases — bases B-spline de ordem k (Cox–de Boor), espelho do pykan",
+        "// Preenche B[0..n_knots-k-2]. Fora do grid estendido, todas valem 0.",
         "// =========================================================================",
-        "static float bspline_eval(float x,",
-        "                          const float* knots, int n_knots,",
-        "                          const float* coef,  int n_coef,",
-        "                          int k) {",
-        "    // Clamping ao domínio válido dos knots",
-        "    float t_lo = pgm_read_float_near(&knots[k]);",
-        "    float t_hi = pgm_read_float_near(&knots[n_knots - k - 1]);",
-        "    if (x < t_lo) x = t_lo;",
-        "    if (x > t_hi) x = t_hi;",
-        "",
-        "    // Localiza o span: maior índice i tal que knots[i] <= x",
-        "    int span = k;",
-        "    for (int i = k; i < n_knots - k - 1; i++) {",
-        "        if (pgm_read_float_near(&knots[i]) <= x) span = i;",
-        "        else break;",
-        "    }",
-        "",
-        "    // Inicializa De Boor com os k+1 coeficientes locais",
-        "    float d[8];  // k=3 → precisa de 4 posições; 8 é margem segura",
-        "    for (int j = 0; j <= k; j++) {",
-        "        int idx = span - k + j;",
-        "        d[j] = (idx >= 0 && idx < n_coef)",
-        "               ? pgm_read_float_near(&coef[idx])",
-        "               : 0.0f;",
-        "    }",
-        "",
-        "    // Recursão De Boor",
-        "    for (int r = 1; r <= k; r++) {",
-        "        for (int j = k; j >= r; j--) {",
-        "            float tl = pgm_read_float_near(&knots[span - k + j]);",
-        "            float tr = pgm_read_float_near(&knots[span + 1 + j - r]);",
-        "            float dn = tr - tl;",
-        "            float alpha = (dn > 1e-8f) ? (x - tl) / dn : 0.0f;",
-        "            d[j] = (1.0f - alpha) * d[j-1] + alpha * d[j];",
+        f"#define KAN_MAX_KNOTS {max_knots}",
+        f"#define KAN_MAX_COEF  {max_coef}",
+        "static void kan_bases(float x, const float* knots, int n_knots, int k, float* B) {",
+        "    float g[KAN_MAX_KNOTS];",
+        "    for (int i = 0; i < n_knots; i++) g[i] = pgm_read_float_near(&knots[i]);",
+        "    float N[KAN_MAX_KNOTS];",
+        "    // ordem 0: indicadora do intervalo [g[i], g[i+1])",
+        "    for (int i = 0; i < n_knots - 1; i++)",
+        "        N[i] = (x >= g[i] && x < g[i + 1]) ? 1.0f : 0.0f;",
+        "    // ordens 1..k (mesma fórmula e mesma ordem de cálculo do pykan)",
+        "    for (int p = 1; p <= k; p++) {",
+        "        for (int i = 0; i < n_knots - 1 - p; i++) {",
+        "            float d1 = g[i + p] - g[i];",
+        "            float d2 = g[i + p + 1] - g[i + 1];",
+        "            float t1 = (d1 != 0.0f) ? (x - g[i]) / d1 * N[i] : 0.0f;",
+        "            float t2 = (d2 != 0.0f) ? (g[i + p + 1] - x) / d2 * N[i + 1] : 0.0f;",
+        "            N[i] = t1 + t2;",
         "        }",
         "    }",
-        "    return d[k];",
+        "    for (int i = 0; i < n_knots - 1 - k; i++) B[i] = N[i];",
         "}",
         "",
         "// SiLU: x * sigmoid(x) = x / (1 + exp(-x))",
@@ -270,60 +265,43 @@ def export_kan_to_cpp(model, output_path="firmware/generated_headers/kan_model.h
         "",
     ]
 
-    # --- Buffers internos ---
     max_dim = max(width)
     lines += [
-        f"static float _buf_a[{max_dim}];  // activações entrada da camada atual",
-        f"static float _buf_b[{max_dim}];  // activações saída  da camada atual",
+        f"static float _buf_a[{max_dim}];  // activações de entrada da camada atual",
+        f"static float _buf_b[{max_dim}];  // activações de saída  da camada atual",
         "",
-    ]
-
-    # --- predict_from_array ---
-    lines += [
         "// =========================================================================",
         "// predict_from_array",
         "// Recebe ponteiro para array de features já escalonadas.",
         "// Retorna o índice da classe com maior logit.",
+        "// As bases dependem só de (x_i, grid_i): são calculadas uma vez por",
+        "// entrada e reaproveitadas para todas as saídas j.",
         "// =========================================================================",
         "int predict_from_array(const float* input) {",
-        "",
+        "    float B[KAN_MAX_COEF];",
         f"    for (int i = 0; i < {width[0]}; i++) _buf_a[i] = input[i];",
         "",
     ]
-
     for l_idx, ld in enumerate(layers_data):
-        n_in    = ld['n_in']
-        n_out   = ld['n_out']
-        n_knots = ld['n_knots']
-        n_coef  = ld['n_coef']
-
+        n_in, n_out = ld['n_in'], ld['n_out']
+        n_knots, n_coef = ld['n_knots'], ld['n_coef']
         lines += [
             f"    // ── Camada {l_idx} ({n_in} → {n_out}) ──────────────────────────",
-            f"    for (int j = 0; j < {n_out}; j++) {{",
-            f"        float bias_j = pgm_read_float_near(&L{l_idx}_BIAS[j]);",
-            f"        float acc    = bias_j;",
-            f"        for (int i = 0; i < {n_in}; i++) {{",
+            f"    for (int j = 0; j < {n_out}; j++) _buf_b[j] = pgm_read_float_near(&L{l_idx}_BIAS[j]);",
+            f"    for (int i = 0; i < {n_in}; i++) {{",
+            f"        float x = _buf_a[i];",
+            f"        float base_val = silu(x);",
+            f"        kan_bases(x, L{l_idx}_GRID[i], {n_knots}, KAN_K, B);",
+            f"        for (int j = 0; j < {n_out}; j++) {{",
             f"            float m = pgm_read_float_near(&L{l_idx}_MASK[i][j]);",
             f"            if (m == 0.0f) continue;  // aresta inativa — pula",
-            f"",
-            f"            float x  = _buf_a[i];",
+            f"            float sp_val = 0.0f;",
+            f"            for (int c = 0; c < {n_coef}; c++)",
+            f"                sp_val += pgm_read_float_near(&L{l_idx}_COEF[i][j][c]) * B[c];",
             f"            float sb = pgm_read_float_near(&L{l_idx}_SCALE_BASE[i][j]);",
             f"            float ss = pgm_read_float_near(&L{l_idx}_SCALE_SP[i][j]);",
-            f"",
-            f"            // Parte residual linear",
-            f"            float base_val = silu(x) * sb;",
-            f"",
-            f"            // Parte spline — grid compartilhado por entrada i",
-            f"            float sp_val = bspline_eval(",
-            f"                x,",
-            f"                L{l_idx}_GRID[i], {n_knots},",
-            f"                L{l_idx}_COEF[i][j], {n_coef},",
-            f"                KAN_K",
-            f"            ) * ss;",
-            f"",
-            f"            acc += m * (base_val + sp_val);",
+            f"            _buf_b[j] += m * (sb * base_val + ss * sp_val);",
             f"        }}",
-            f"        _buf_b[j] = acc;",
             f"    }}",
             f"    for (int i = 0; i < {n_out}; i++) _buf_a[i] = _buf_b[i];",
             f"",
@@ -393,32 +371,21 @@ def verify_export(model, X_val_t, y_val_enc, n_samples=200):
     depth = model.depth
     k     = model.k
 
-    def bspline_np(x, knots, coef, k):
-        n = len(coef)
-        t_lo = knots[k]
-        t_hi = knots[len(knots) - k - 1]
-        x = float(np.clip(x, t_lo, t_hi))
+    def bases_np(x, knots, k):
+        """Bases B-spline como o pykan (Cox–de Boor no grid estendido, sem clamp)."""
+        g = knots
+        n = len(g)
+        N = np.array([1.0 if (g[i] <= x < g[i + 1]) else 0.0 for i in range(n - 1)])
+        for p in range(1, k + 1):
+            novo = np.zeros(n - 1 - p)
+            for i in range(n - 1 - p):
+                d1, d2 = g[i + p] - g[i], g[i + p + 1] - g[i + 1]
+                t1 = (x - g[i]) / d1 * N[i] if d1 != 0 else 0.0
+                t2 = (g[i + p + 1] - x) / d2 * N[i + 1] if d2 != 0 else 0.0
+                novo[i] = t1 + t2
+            N = novo
+        return N   # n - k - 1 bases = n_coef
 
-        span = k
-        for i in range(k, len(knots) - k - 1):
-            if knots[i] <= x:
-                span = i
-            else:
-                break
-
-        d = np.zeros(k + 1, dtype=np.float64)
-        for j in range(k + 1):
-            idx = span - k + j
-            d[j] = float(coef[idx]) if 0 <= idx < n else 0.0
-
-        for r in range(1, k + 1):
-            for j in range(k, r - 1, -1):
-                tl = knots[span - k + j]
-                tr = knots[span + 1 + j - r]
-                dn = tr - tl
-                alpha = (x - tl) / dn if dn > 1e-8 else 0.0
-                d[j] = (1.0 - alpha) * d[j-1] + alpha * d[j]
-        return d[k]
 
     def silu_np(x):
         return x / (1.0 + np.exp(-x))
@@ -432,25 +399,17 @@ def verify_export(model, X_val_t, y_val_enc, n_samples=200):
             scale_base = layer.scale_base.detach().cpu().numpy().astype(np.float64)
             scale_sp   = layer.scale_sp.detach().cpu().numpy().astype(np.float64)
             mask       = layer.mask.detach().cpu().numpy().astype(np.float64)
-
             nb = model.node_bias[l_idx]
-            node_bias = nb.detach().cpu().numpy().flatten().astype(np.float64) \
-                        if nb is not None else np.zeros(layer.out_dim)
-
-            n_in  = int(layer.in_dim)
-            n_out = int(layer.out_dim)
-            b = node_bias.copy()
-
-            for j in range(n_out):
-                for i in range(n_in):
-                    m = mask[i, j]
-                    if m == 0.0:
-                        continue
-                    x   = a[i]
-                    sp  = bspline_np(x, grid[i], coef[i, j], k)
-                    base = silu_np(x)
-                    b[j] += m * (scale_base[i, j] * base + scale_sp[i, j] * sp)
+            b = (nb.detach().cpu().numpy().flatten().astype(np.float64)
+                 if nb is not None else np.zeros(layer.out_dim))
+            b = b.copy()
+            for i in range(int(layer.in_dim)):
+                x = a[i]
+                B = bases_np(x, grid[i], k)
+                sp = coef[i] @ B            # (n_out,)
+                b += mask[i] * (scale_base[i] * silu_np(x) + scale_sp[i] * sp)
             a = b
+
         return int(np.argmax(a))
 
     X_np = X_val_t.numpy()[:n_samples]
