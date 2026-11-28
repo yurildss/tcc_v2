@@ -12,8 +12,8 @@ FEATURE_NAMES = [
     "RR_pre / RR mediano do paciente",
     "RR_post / RR mediano do paciente",
     "Razao RR post/pre",
-    "RR_pre normalizado",
-    "RR_post normalizado",
+    "RR_pre (s)",
+    "RR_post (s)",
     # Bloco 2 — Amplitudes [5-10]
     "Amp pico anterior (rel. baseline) / amp_ref",
     "Amp pico central (rel. baseline) / amp_ref",
@@ -22,10 +22,10 @@ FEATURE_NAMES = [
     "(Amp central - anterior) / amp_ref",
     "(Amp central - posterior) / amp_ref",
     # Bloco 3 — Morfologia QRS [11-14]
-    "Largura QRS (s)",
-    "Upstroke QRS (s)",
-    "Downstroke QRS (s)",
-    "Assimetria QRS",
+    "Largura QRS medida (s)",
+    "QRS: inicio ate pico (s)",
+    "QRS: pico ate fim (s)",
+    "QRS: fracao antes do pico",
     # Bloco 4 — Segmento pre-QRS [15-19]
     "Pre-QRS: mean - baseline / amp_ref",
     "Pre-QRS: std / amp_ref",

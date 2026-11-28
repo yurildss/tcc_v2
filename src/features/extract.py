@@ -111,8 +111,11 @@ def extract_features(signal_data, fs=FS):
     features.append(rr_pre  / RR_REF)
     features.append(rr_post / RR_REF)
     features.append(rr_post / (rr_pre + 1e-6))
-    features.append(rr_pre  / (rr_mean + 1e-6))
-    features.append(rr_post / (rr_mean + 1e-6))
+    # [3-4] RR absoluto em segundos. Tempo é fisiológico e comparável entre
+    # pessoas (não depende do eletrodo), e o RR relativo sozinho falha quando a
+    # arritmia domina o registro (ex.: 232, quase todo A: o "típico" é o A).
+    features.append(rr_pre  / fs)
+    features.append(rr_post / fs)
 
     amp_prev    = float(sig[p_prev])
     amp_central = float(sig[p_central])
@@ -130,10 +133,13 @@ def extract_features(signal_data, fs=FS):
     amp_prev_rel    = amp_prev    - baseline
     amp_next_rel    = amp_next    - baseline
 
-    half_qrs = int(0.06 * fs)
-    qrs_start = max(0,   p_central - half_qrs)
-    qrs_end   = min(n-1, p_central + half_qrs)
-    qrs_seg   = sig[qrs_start : qrs_end + 1]
+    # ---- Delimitação do QRS (início/fim medidos, polaridade indiferente) ----
+    # Antes: janela fixa de ±60 ms (120 ms) -> a largura nunca passava de
+    # 120 ms, justamente o limiar clínico do bloqueio de ramo (L/R), e
+    # subida/descida valiam sempre 60 ms. Agora o QRS é delimitado pelo
+    # desvio |sinal - baseline| numa busca de ±150 ms.
+    qrs_start, qrs_end, pk = delimitar_qrs(sig, baseline, p_prev, p_central, p_next, fs)
+    qrs_seg = sig[qrs_start : qrs_end + 1]
 
     # [5-10] amplitudes sem o nível DC e relativas à amplitude típica do paciente
     features.append(amp_prev_rel    / A)
@@ -143,21 +149,19 @@ def extract_features(signal_data, fs=FS):
     features.append((amp_central_rel - amp_prev_rel) / A)     # central vs anterior
     features.append((amp_central_rel - amp_next_rel) / A)     # central vs posterior
 
-    threshold = baseline + 0.5 * amp_central_rel
-    above     = np.where(qrs_seg > threshold)[0]
-    qrs_width = float(len(above)) / fs if len(above) > 0 else 0.0
-
-    local_peak = p_central - qrs_start
-    upstroke   = float(local_peak) / fs if local_peak > 0 else 0.0
-    downstroke = float(len(qrs_seg) - local_peak - 1) / fs
-    qrs_asymmetry = upstroke / (downstroke + 1e-6)
+    # [11-14] largura do QRS em segundos (absoluta: >0,12 s = bloqueio de ramo),
+    # tempo de subida e de descida, e fração da largura antes do pico
+    qrs_width     = float(qrs_end - qrs_start + 1) / fs
+    upstroke      = float(pk - qrs_start) / fs
+    downstroke    = float(qrs_end - pk) / fs
+    qrs_asymmetry = upstroke / qrs_width
 
     features.append(qrs_width)
     features.append(upstroke)
     features.append(downstroke)
     features.append(qrs_asymmetry)
 
-    pre_seg = sig[p_prev + margin : p_central - half_qrs]
+    pre_seg = sig[p_prev + margin : qrs_start]
 
     if len(pre_seg) > 5:
         pre_mean   = float(np.mean(pre_seg))
@@ -174,7 +178,7 @@ def extract_features(signal_data, fs=FS):
     features.append(pre_skew)
     features.append(pre_kurt)
 
-    post_seg = sig[p_central + half_qrs : p_next - margin]
+    post_seg = sig[qrs_end + 1 : p_next - margin]
 
     if len(post_seg) > 5:
         post_mean  = float(np.mean(post_seg))
@@ -246,6 +250,50 @@ def extract_features(signal_data, fs=FS):
     if nao_finitas:
         raise ValueError(f"Features não finitas nos índices {nao_finitas}")
     return features
+
+
+QRS_BUSCA_S   = 0.150   # busca ±150 ms em torno da anotação
+QRS_PICO_S    = 0.050   # pico principal: maior desvio a até ±50 ms da anotação
+QRS_LIMIAR    = 0.15    # fim do QRS: desvio < 15% do desvio do pico...
+QRS_SUSTENT_S = 0.008   # ...por pelo menos 8 ms seguidos (ignora entalhes)
+
+
+def delimitar_qrs(sig, baseline, p_prev, p_central, p_next, fs=FS):
+    """Início, fim e pico do QRS (índices em sig), sem depender da polaridade.
+
+    Usa o desvio d = |sig - baseline|. O pico é o maior desvio perto da
+    anotação; a partir dele caminha para os dois lados até d ficar abaixo de
+    15% do pico por 8 ms seguidos. A busca não invade os batimentos vizinhos.
+    """
+    n = len(sig)
+    margem = int(0.05 * fs)
+    busca  = int(QRS_BUSCA_S * fs)
+    lo = max(0,     p_prev + margem, p_central - busca)
+    hi = min(n - 1, p_next - margem, p_central + busca)
+    if hi - lo < 4:                       # batimentos muito colados
+        lo, hi = max(0, p_central - 2), min(n - 1, p_central + 2)
+
+    d = np.abs(np.asarray(sig[lo:hi + 1], dtype=np.float64) - baseline)
+    c = p_central - lo
+    w = int(QRS_PICO_S * fs)
+    k0, k1 = max(0, c - w), min(len(d) - 1, c + w)
+    pk = k0 + int(np.argmax(d[k0:k1 + 1]))
+    limiar = QRS_LIMIAR * d[pk]
+    sustent = max(2, int(round(QRS_SUSTENT_S * fs)))
+
+    def andar(passo):
+        ultimo_acima, abaixo, i = pk, 0, pk
+        while 0 <= i + passo < len(d):
+            i += passo
+            if d[i] >= limiar:
+                ultimo_acima, abaixo = i, 0
+            else:
+                abaixo += 1
+                if abaixo >= sustent:
+                    break
+        return ultimo_acima
+
+    return lo + andar(-1), lo + andar(+1), lo + pk
 
 
 def extract_from_file(args):

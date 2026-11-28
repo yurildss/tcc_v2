@@ -57,7 +57,8 @@ MAX_POR_CLASSE_POR_RECORD = {
 # =============================================================================
 
 print("Carregando CSV...")
-df = pd.read_csv(CSV_FILE)
+# channel_1 não é usado: não carregar economiza memória e tempo (31 mi de linhas)
+df = pd.read_csv(CSV_FILE, usecols=lambda c: c.strip().strip("'\"") != 'channel_1')
 
 # Limpa nomes de colunas (remove espaços e aspas extras)
 df.columns = (
@@ -147,6 +148,9 @@ def extrair_batimentos(df_record, record_name):
     """
     resultados = []
 
+    samples_rec = df_record['sample #'].to_numpy()
+    colunas_rec = df_record[['channel_0', 'sample #', 'type']]
+
     # Todas as linhas anotadas (picos R) — em ordem de sample
     anotados = df_record[df_record['type'] != 'NC'].reset_index(drop=True)
 
@@ -167,13 +171,12 @@ def extrair_batimentos(df_record, record_name):
         sample_central = int(anotados.loc[i,     'sample #'])
         sample_next    = int(anotados.loc[i + 1, 'sample #'])
 
-        # Extrai o segmento: do pico anterior ao pico posterior (inclusive)
-        mask = (
-            (df_record['sample #'] >= sample_prev) &
-            (df_record['sample #'] <= sample_next)
-        )
-        seg = df_record.loc[mask, ['channel_0', 'sample #', 'type']].copy()
-        seg = seg.reset_index(drop=True)
+        # Extrai o segmento: do pico anterior ao pico posterior (inclusive).
+        # As amostras estão ordenadas: busca binária em vez de comparar as
+        # ~650 mil amostras do registro para cada batimento (era o gargalo).
+        ini = np.searchsorted(samples_rec, sample_prev, side='left')
+        fim = np.searchsorted(samples_rec, sample_next, side='right')
+        seg = colunas_rec.iloc[ini:fim].reset_index(drop=True)
 
         # Verificação de sanidade
         if len(seg) < 10:
@@ -193,6 +196,18 @@ def extrair_batimentos(df_record, record_name):
     return resultados
 
 
+def salvar_segmento(seg, fpath):
+    """Grava o segmento no mesmo formato do DataFrame.to_csv(index=False),
+    mas ~10x mais rápido (o to_csv era o gargalo com ~109 mil arquivos).
+    tolist() devolve float/int do Python, cujo repr é o mesmo que o pandas usa."""
+    ch = seg['channel_0'].tolist()
+    sm = seg['sample #'].tolist()
+    tp = seg['type'].tolist()
+    with open(fpath, 'w', newline='') as f:
+        f.write('channel_0,sample #,type\n')
+        f.write(''.join(f'{c!r},{s},{t}\n' for c, s, t in zip(ch, sm, tp)))
+
+
 # =============================================================================
 # LOOP PRINCIPAL
 # =============================================================================
@@ -210,8 +225,8 @@ print(f"Processando {len(records)} registros...\n")
 
 stats_por_registro = {}
 
-for rec_idx, record_name in enumerate(sorted(records)):
-    df_record = df[df['record'] == record_name].copy()
+# groupby percorre o DataFrame uma vez só (antes: um filtro de 31 mi de linhas por registro)
+for rec_idx, (record_name, df_record) in enumerate(df.groupby('record', sort=True)):
     stats_por_registro[str(record_name).split('_')[0]] = estatisticas_registro(df_record)
 
     batimentos = extrair_batimentos(df_record, record_name)
@@ -233,7 +248,7 @@ for rec_idx, record_name in enumerate(sorted(records)):
         fname    = f"{cls}_beat_{n_global}_{record_name}.csv"
         fpath    = os.path.join(OUTPUT_DIR, cls, fname)
 
-        bat['segment'].to_csv(fpath, index=False)
+        salvar_segmento(bat['segment'], fpath)
 
         contadores[cls]          += 1
         count_neste_record[cls]  += 1
