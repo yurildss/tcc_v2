@@ -209,10 +209,15 @@ def main():
         }
 
         # Relatório de Classificação e Matriz de Confusão
-        rep = classification_report(y_true, y_pred, target_names=class_names)
+        rep = classification_report(y_true, y_pred, target_names=class_names, digits=4)
         with open(os.path.join(OUTPUT_DIR, f"{nome}_report.txt"), "w") as f:
             f.write(rep)
             f.write(f"\nInferencia: {inf_ms:.4f} ms/amostra | Tamanho: {tam_kb:.2f} KB\n")
+
+        # Também no log: é o resultado inter-paciente (pacientes nunca vistos no treino)
+        print(f"\n{'-' * 65}\n{nome} — CONJUNTO DE TESTE (inter-paciente, {len(y_true)} batimentos)\n{'-' * 65}")
+        print(rep)
+        print(f"Inferência: {inf_ms:.4f} ms/amostra | Tamanho: {tam_kb:.2f} KB")
 
         cm = confusion_matrix(y_true, y_pred)
         plt.figure(figsize=(7,5))
@@ -356,6 +361,13 @@ def main():
     # Tabela Sumário em CSV
     df_summary = pd.DataFrame(results).T.drop(columns=['recall_cls'])
     df_summary.to_csv(os.path.join(OUTPUT_DIR, "comparacao_final.csv"))
+
+    # Tabela comparativa no log: recall por classe, macro-F1 e acurácia no TESTE
+    print(f"\n{'=' * 65}\nCOMPARAÇÃO NO TESTE INTER-PACIENTE — recall por classe (%)\n{'=' * 65}")
+    print(f"{'Modelo':<13}" + "".join(f"{c:>7}" for c in class_names) + f"{'F1-mac':>8}{'Acc':>7}")
+    for nome, r in results.items():
+        print(f"{nome:<13}" + "".join(f"{v:>7.1f}" for v in r['recall_cls'])
+              + f"{r['f1']:>8.1f}{r['acc']:>7.1f}")
 
     print(f"\n✅ Benchmark concluído com sucesso! Resultados salvos na pasta '{OUTPUT_DIR}/'.")
 
