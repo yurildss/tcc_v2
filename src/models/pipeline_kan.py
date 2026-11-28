@@ -12,8 +12,11 @@ import seaborn as sns
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import confusion_matrix, classification_report
 
-from kan import KAN
+from concurrent.futures import ProcessPoolExecutor
+
+from src.models.kan_config import build_kan
 from src.features.extract import (
+    extract_from_file,
     extract_features,
     load_signal_with_structure,
     FS,
@@ -22,37 +25,38 @@ from src.features.extract import (
 N_FEATURES = 46
 
 
+N_PROCESSOS = os.cpu_count() or 1
+
+
 def build_dataset(root_dir, fs=FS):
+    """Extrai as features de todos os batimentos de root_dir/<classe>/*.csv.
+
+    Usa todos os núcleos da CPU (ProcessPoolExecutor). A ordem é determinística
+    (classes e arquivos ordenados), então o resultado é igual ao sequencial.
+    """
     X, y = [], []
     skipped = 0
     erros = []
 
-    for class_name in sorted(os.listdir(root_dir)):
-        class_path = os.path.join(root_dir, class_name)
-        if not os.path.isdir(class_path):
-            continue
-
-        loaded = 0
-        for file in os.listdir(class_path):
-            if not file.endswith(".csv"):
+    with ProcessPoolExecutor(max_workers=N_PROCESSOS) as pool:
+        for class_name in sorted(os.listdir(root_dir)):
+            class_path = os.path.join(root_dir, class_name)
+            if not os.path.isdir(class_path):
                 continue
+            arquivos = sorted(f for f in os.listdir(class_path) if f.endswith(".csv"))
+            tarefas  = [(os.path.join(class_path, f), fs) for f in arquivos]
 
-            data = load_signal_with_structure(os.path.join(class_path, file))
-            if data is None:
-                skipped += 1
-                continue
-
-            try:
-                feat = extract_features(data, fs)
+            loaded = 0
+            for feat, erro in pool.map(extract_from_file, tarefas, chunksize=64):
+                if feat is None:
+                    skipped += 1
+                    if len(erros) < 5:
+                        erros.append(erro)
+                    continue
                 X.append(feat)
                 y.append(class_name)
                 loaded += 1
-            except Exception as e:
-                skipped += 1
-                if len(erros) < 5:
-                    erros.append(f"{file}: {e}")
-
-        print(f"  {class_name}: {loaded} amostras")
+            print(f"  {class_name}: {loaded} amostras")
 
     if skipped > 0:
         print(f"  (ignorados: {skipped} arquivos)")
@@ -116,11 +120,7 @@ y_test_t  = torch.tensor(y_test_enc,     dtype=torch.long)
 # KAN
 n_features = X_train_t.shape[1]
 
-model = KAN(
-    width=[n_features, 32, 16, num_classes],
-    grid=5,
-    k=3,
-)
+model = build_kan(n_features, num_classes)
 
 print(f"\nArquitetura KAN: {n_features} -> 32 -> 16 -> {num_classes}")
 

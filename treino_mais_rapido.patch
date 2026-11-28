@@ -1,0 +1,283 @@
+diff --git a/scripts/run_pipeline.sh b/scripts/run_pipeline.sh
+index 015f60d46..fa9b9cc80 100644
+--- a/scripts/run_pipeline.sh
++++ b/scripts/run_pipeline.sh
+@@ -1,31 +1,44 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ 
++# Mostra quanto tempo cada etapa levou (para achar gargalos)
++INICIO_TOTAL=$SECONDS
++etapa_ini=$SECONDS
++tempo() { echo "   ⏱  $1: $(( (SECONDS - etapa_ini) / 60 )) min $(( (SECONDS - etapa_ini) % 60 )) s"; etapa_ini=$SECONDS; }
++
+ 
+ echo "1/7 - Ingest raw data"
+ python3 scripts/wrap_ingest.py
++tempo "ingest"
+ 
+ echo "2/7 - Prepare: cortar batimentos"
+ python3 scripts/wrap_prepare.py
++tempo "prepare"
+ 
+ echo "3/7 - Split inter-paciente (antes do augmentation)"
+ python3 scripts/wrap_split.py
++tempo "split"
+ 
+ echo "4/7 - Augment (somente treino)"
+ python3 scripts/wrap_augment.py
++tempo "augment"
+ 
+ echo "5/7 - Extract + build pipeline"
+ python3 scripts/wrap_pipeline_kan.py
++tempo "extração de features"
+ 
+ echo "6/7 - Train (KAN)"
+ python3 scripts/wrap_train.py
++tempo "treino KAN"
+ 
+ echo "=================================================="
+ echo "6.5/7 - Treinar e Avaliar Benchmark (CNN1D, LSTM, RF, XGBoost)"
+ echo "=================================================="
+ python3 -m src.models.benchmark
++tempo "benchmark"
+ 
+ echo "7/7 - Export headers"
+ python3 scripts/wrap_export.py
++tempo "export"
+ 
+-echo "Pipeline finalizado."
++echo "Pipeline finalizado em $(( (SECONDS - INICIO_TOTAL) / 60 )) min."
+diff --git a/src/export/export_all_esp32.py b/src/export/export_all_esp32.py
+index 7199efc8e..fa686123f 100644
+--- a/src/export/export_all_esp32.py
++++ b/src/export/export_all_esp32.py
+@@ -35,8 +35,6 @@ HEADERS_DIR    = "firmware/generated_headers"
+ SPLIT_DIR      = "data/processed/split"
+ BENCH_DIR      = "benchmark_resultados"
+ KAN_STATE_PATH = os.path.join(HEADERS_DIR, "kan_best_state.pt")
+-KAN_WIDTH_OCULTAS = [32, 16]      # igual a src/models/pipeline_kan.py
+-KAN_GRID, KAN_K   = 5, 3
+ AMOSTRAS_POR_CLASSE = 50          # dataset.h: 8 classes x 50 = 400 amostras
+ 
+ 
+@@ -178,8 +176,6 @@ def exportar_xgboost(xgb_model, output_path, X_amostras, y_amostras):
+ # EXECUÇÃO
+ # =============================================================================
+ def main():
+-    from kan import KAN
+-
+     os.makedirs(HEADERS_DIR, exist_ok=True)
+     encoder = joblib.load(os.path.join(HEADERS_DIR, "encoder.pkl"))
+     scaler  = joblib.load(os.path.join(HEADERS_DIR, "scaler.pkl"))
+@@ -194,8 +190,8 @@ def main():
+ 
+     # ---- KAN (modelo principal do TCC: falha aqui interrompe o pipeline)
+     titulo("Exportando KAN (B-splines numéricas, espelho exato do pykan)")
+-    width = [X_test.shape[1]] + KAN_WIDTH_OCULTAS + [len(class_names)]
+-    model = KAN(width=width, grid=KAN_GRID, k=KAN_K)
++    from src.models.kan_config import build_kan
++    model = build_kan(X_test.shape[1], len(class_names))
+     model.load_state_dict(torch.load(KAN_STATE_PATH, map_location="cpu"))
+     model.eval()
+     export_kan_to_cpp(model, output_path=os.path.join(HEADERS_DIR, "kan_model.h"),
+diff --git a/src/features/extract.py b/src/features/extract.py
+index f80d55bd5..ea522c6fc 100644
+--- a/src/features/extract.py
++++ b/src/features/extract.py
+@@ -248,6 +248,19 @@ def extract_features(signal_data, fs=FS):
+     return features
+ 
+ 
++def extract_from_file(args):
++    """(caminho, fs) -> (features, erro). Função de módulo para poder rodar em
++    processos paralelos (ProcessPoolExecutor) em src/models/pipeline_kan.py."""
++    path, fs = args
++    data = load_signal_with_structure(path)
++    if data is None:
++        return None, f"{os.path.basename(path)}: não tem exatamente 3 picos"
++    try:
++        return extract_features(data, fs), None
++    except Exception as e:
++        return None, f"{os.path.basename(path)}: {e}"
++
++
+ def build_dataset(root_dir, fs=FS):
+     import os
+     X, y = [], []
+diff --git a/src/models/benchmark.py b/src/models/benchmark.py
+index 5b4167f05..a0ca5e21e 100644
+--- a/src/models/benchmark.py
++++ b/src/models/benchmark.py
+@@ -233,7 +233,10 @@ def main():
+     if HAS_KAN and os.path.exists(KAN_STATE_PATH):
+         print("\n[KAN] A carregar modelo treinado...")
+         try:
+-            kan_model = KAN(width=[input_length, 32, 16, num_classes], grid=5, k=3)
++            # Modo rápido (model.speed()): mede a inferência do modelo em si,
++            # sem o custo extra do ramo simbólico e do salvamento de ativações
++            from src.models.kan_config import build_kan
++            kan_model = build_kan(input_length, num_classes)
+             kan_model = kan_model.to(device)
+             kan_model.load_state_dict(torch.load(KAN_STATE_PATH, map_location=device))
+             kan_model.eval()
+diff --git a/src/models/kan_config.py b/src/models/kan_config.py
+new file mode 100644
+index 000000000..0ca2add7e
+--- /dev/null
++++ b/src/models/kan_config.py
+@@ -0,0 +1,29 @@
++# =============================================================================
++# src/models/kan_config.py — configuração única do KAN
++# =============================================================================
++# Usada pelo treino, benchmark e exportação, para que todos construam
++# exatamente a mesma arquitetura (antes ela estava repetida em 3 arquivos).
++# =============================================================================
++from kan import KAN
++
++KAN_HIDDEN = [32, 16]   # camadas ocultas: 46 -> 32 -> 16 -> 8
++KAN_GRID   = 5
++KAN_K      = 3
++
++
++def build_kan(n_in, n_out, fast=True):
++    """Cria o KAN do TCC.
++
++    fast=True liga model.speed() do pykan: desativa o ramo simbólico (que fica
++    zerado e não contribui para a saída) e o salvamento das ativações a cada
++    forward (usado só para gráficos). A saída é idêntica, e o treino fica
++    ~35x mais rápido. update_grid() continua funcionando: o pykan liga o
++    salvamento das ativações temporariamente só para ele.
++
++    auto_save=False evita que o pykan grave checkpoints em ./model a cada
++    operação (as mensagens "saving model version" no log).
++    """
++    model = KAN(width=[n_in] + KAN_HIDDEN + [n_out], grid=KAN_GRID, k=KAN_K, auto_save=False)
++    if fast:
++        model.speed()
++    return model
+diff --git a/src/models/pipeline_kan.py b/src/models/pipeline_kan.py
+index ccd1e2c41..d047dd4a5 100644
+--- a/src/models/pipeline_kan.py
++++ b/src/models/pipeline_kan.py
+@@ -12,8 +12,11 @@ import seaborn as sns
+ from sklearn.preprocessing import LabelEncoder, StandardScaler
+ from sklearn.metrics import confusion_matrix, classification_report
+ 
+-from kan import KAN
++from concurrent.futures import ProcessPoolExecutor
++
++from src.models.kan_config import build_kan
+ from src.features.extract import (
++    extract_from_file,
+     extract_features,
+     load_signal_with_structure,
+     FS,
+@@ -22,37 +25,38 @@ from src.features.extract import (
+ N_FEATURES = 46
+ 
+ 
++N_PROCESSOS = os.cpu_count() or 1
++
++
+ def build_dataset(root_dir, fs=FS):
++    """Extrai as features de todos os batimentos de root_dir/<classe>/*.csv.
++
++    Usa todos os núcleos da CPU (ProcessPoolExecutor). A ordem é determinística
++    (classes e arquivos ordenados), então o resultado é igual ao sequencial.
++    """
+     X, y = [], []
+     skipped = 0
+     erros = []
+ 
+-    for class_name in sorted(os.listdir(root_dir)):
+-        class_path = os.path.join(root_dir, class_name)
+-        if not os.path.isdir(class_path):
+-            continue
+-
+-        loaded = 0
+-        for file in os.listdir(class_path):
+-            if not file.endswith(".csv"):
++    with ProcessPoolExecutor(max_workers=N_PROCESSOS) as pool:
++        for class_name in sorted(os.listdir(root_dir)):
++            class_path = os.path.join(root_dir, class_name)
++            if not os.path.isdir(class_path):
+                 continue
+-
+-            data = load_signal_with_structure(os.path.join(class_path, file))
+-            if data is None:
+-                skipped += 1
+-                continue
+-
+-            try:
+-                feat = extract_features(data, fs)
++            arquivos = sorted(f for f in os.listdir(class_path) if f.endswith(".csv"))
++            tarefas  = [(os.path.join(class_path, f), fs) for f in arquivos]
++
++            loaded = 0
++            for feat, erro in pool.map(extract_from_file, tarefas, chunksize=64):
++                if feat is None:
++                    skipped += 1
++                    if len(erros) < 5:
++                        erros.append(erro)
++                    continue
+                 X.append(feat)
+                 y.append(class_name)
+                 loaded += 1
+-            except Exception as e:
+-                skipped += 1
+-                if len(erros) < 5:
+-                    erros.append(f"{file}: {e}")
+-
+-        print(f"  {class_name}: {loaded} amostras")
++            print(f"  {class_name}: {loaded} amostras")
+ 
+     if skipped > 0:
+         print(f"  (ignorados: {skipped} arquivos)")
+@@ -116,11 +120,7 @@ y_test_t  = torch.tensor(y_test_enc,     dtype=torch.long)
+ # KAN
+ n_features = X_train_t.shape[1]
+ 
+-model = KAN(
+-    width=[n_features, 32, 16, num_classes],
+-    grid=5,
+-    k=3,
+-)
++model = build_kan(n_features, num_classes)
+ 
+ print(f"\nArquitetura KAN: {n_features} -> 32 -> 16 -> {num_classes}")
+ 
+diff --git a/src/models/train_custom.py b/src/models/train_custom.py
+index b445ac15f..94dfe9547 100644
+--- a/src/models/train_custom.py
++++ b/src/models/train_custom.py
+@@ -8,7 +8,28 @@ import torch.nn.functional as F
+ import numpy as np
+ import matplotlib.pyplot as plt
+ from sklearn.metrics import classification_report
+-from src.models.pipeline_kan import model, X_train_t, y_train_t, X_val_t, y_val_t, encoder, class_names, num_classes
++import joblib
++from src.models.kan_config import build_kan
++
++# Lê as features já extraídas e escalonadas pela etapa 5 (pipeline_kan.py).
++# Antes este script importava pipeline_kan, o que refazia a extração de
++# features de todos os ~113 mil batimentos uma segunda vez.
++SPLIT_DIR = "data/processed/split"
++encoder     = joblib.load("firmware/generated_headers/encoder.pkl")
++class_names = list(encoder.classes_)
++num_classes = len(class_names)
++
++def _carregar(nome):
++    X = torch.tensor(np.load(os.path.join(SPLIT_DIR, f"X_{nome}.npy")), dtype=torch.float32)
++    y = torch.tensor(np.load(os.path.join(SPLIT_DIR, f"y_{nome}.npy")), dtype=torch.long)
++    return X, y
++
++X_train_t, y_train_t = _carregar("train")
++X_val_t,   y_val_t   = _carregar("val")
++print(f"Treino: {tuple(X_train_t.shape)} | Validação: {tuple(X_val_t.shape)} | classes: {class_names}")
++
++torch.set_num_threads(os.cpu_count() or 1)
++model = build_kan(X_train_t.shape[1], num_classes)   # modo rápido (model.speed())
+ 
+ # =============================================================================
+ # HYPERPARAMS (kept as in original)

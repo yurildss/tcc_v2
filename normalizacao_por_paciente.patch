@@ -1,0 +1,360 @@
+diff --git a/src/data/prepare.py b/src/data/prepare.py
+index 5afcb7285..9f11974b4 100644
+--- a/src/data/prepare.py
++++ b/src/data/prepare.py
+@@ -85,6 +85,55 @@ print("Distribuição das anotações (type != NC):")
+ print(type_counts.to_string())
+ print()
+ 
++# =============================================================================
++# SÓ BATIMENTOS VIRAM PICOS
++# =============================================================================
++# Anotações que NÃO são batimentos (+ mudança de ritmo, ~ ruído, " comentário,
++# | artefato, x onda P não conduzida, [ ] início/fim de flutter ...) eram
++# tratadas como "pico vizinho", gerando intervalos RR errados. Elas passam a
++# ser 'NC' (amostra comum). Símbolos de batimento segundo a PhysioNet
++# ('/' já foi trocado por 'B'):
++SIMBOLOS_BATIMENTO = set("NLRBAaJSVFejEfQ!")
++
++nao_batimento = (df['type'] != 'NC') & (~df['type'].isin(SIMBOLOS_BATIMENTO))
++print(f"Anotações que não são batimentos (viram 'NC'): {int(nao_batimento.sum()):,}")
++print(df.loc[nao_batimento, 'type'].value_counts().to_string())
++df.loc[nao_batimento, 'type'] = 'NC'
++print()
++
++# =============================================================================
++# ESTATÍSTICAS POR PACIENTE (normalização inter-paciente)
++# =============================================================================
++# Features absolutas (RR em amostras, amplitudes em mV) funcionam como uma
++# "impressão digital" do paciente e não generalizam para pacientes novos.
++# Para cada registro calculamos referências robustas (medianas) que o
++# src/features/extract.py usa para normalizar as features:
++#   rr_ref  : mediana dos intervalos RR entre batimentos consecutivos (amostras)
++#   amp_ref : mediana da amplitude pico-a-pico do QRS (janela ±60 ms) em mV
++# Não usam rótulo de classe, só a posição dos batimentos — no ESP32, em modo
++# "grava e analisa", essas medianas são calculadas sobre o registro gravado.
++STATS_FILE   = "data/processed/record_stats.json"
++MEIA_JANELA_QRS = int(round(0.06 * 360))
++
++
++def estatisticas_registro(df_record):
++    samples = df_record['sample #'].to_numpy()
++    sig     = df_record['channel_0'].to_numpy(dtype=np.float64)
++    # posições (0..len-1) dos batimentos dentro do registro
++    pos     = np.flatnonzero(df_record['type'].to_numpy() != 'NC')
++    rr = np.diff(samples[pos])
++    rr = rr[rr > 0]
++    ptp = []
++    for p in pos:
++        ini, fim = max(0, p - MEIA_JANELA_QRS), min(len(sig), p + MEIA_JANELA_QRS + 1)
++        ptp.append(np.ptp(sig[ini:fim]))
++    return {
++        'rr_ref':    float(np.median(rr)),
++        'amp_ref':   float(np.median(ptp)),
++        'n_batidas': int(len(pos)),
++    }
++
++
+ # =============================================================================
+ # FUNÇÃO PRINCIPAL DE CORTE
+ # =============================================================================
+@@ -159,8 +208,11 @@ for cls in CLASSES_ALVO:
+ records = df['record'].unique()
+ print(f"Processando {len(records)} registros...\n")
+ 
++stats_por_registro = {}
++
+ for rec_idx, record_name in enumerate(sorted(records)):
+     df_record = df[df['record'] == record_name].copy()
++    stats_por_registro[str(record_name).split('_')[0]] = estatisticas_registro(df_record)
+ 
+     batimentos = extrair_batimentos(df_record, record_name)
+ 
+@@ -191,6 +243,17 @@ for rec_idx, record_name in enumerate(sorted(records)):
+         print(f"  [{rec_idx+1:3d}/{len(records)}] {record_name:<20s} "
+               f"| salvo até agora: {total_salvo:,}")
+ 
++import json
++os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
++with open(STATS_FILE, "w") as f:
++    json.dump(stats_por_registro, f, indent=1, sort_keys=True)
++rr_refs  = [v['rr_ref']  for v in stats_por_registro.values()]
++amp_refs = [v['amp_ref'] for v in stats_por_registro.values()]
++print(f"\nEstatísticas por paciente salvas em {STATS_FILE}")
++print(f"  rr_ref : {min(rr_refs):.0f} a {max(rr_refs):.0f} amostras "
++      f"({60*360/max(rr_refs):.0f} a {60*360/min(rr_refs):.0f} bpm)")
++print(f"  amp_ref: {min(amp_refs):.2f} a {max(amp_refs):.2f} mV")
++
+ # =============================================================================
+ # RELATÓRIO FINAL
+ # =============================================================================
+diff --git a/src/export/generate_scaler_h.py b/src/export/generate_scaler_h.py
+index 6e0098afe..d4dd83fd9 100644
+--- a/src/export/generate_scaler_h.py
++++ b/src/export/generate_scaler_h.py
+@@ -9,57 +9,57 @@ import os
+ # Nomes das 46 features na ordem exata de src/features/extract.py
+ FEATURE_NAMES = [
+     # Bloco 1 — RR Intervals [0-4]
+-    "RR_pre (amostras)",
+-    "RR_post (amostras)",
++    "RR_pre / RR mediano do paciente",
++    "RR_post / RR mediano do paciente",
+     "Razao RR post/pre",
+     "RR_pre normalizado",
+     "RR_post normalizado",
+     # Bloco 2 — Amplitudes [5-10]
+-    "Amp pico anterior",
+-    "Amp pico central",
+-    "Amp pico posterior",
+-    "Amp central relativa (baseline)",
+-    "Razao amp central/anterior",
+-    "Razao amp central/posterior",
++    "Amp pico anterior (rel. baseline) / amp_ref",
++    "Amp pico central (rel. baseline) / amp_ref",
++    "Amp pico posterior (rel. baseline) / amp_ref",
++    "QRS pico-a-pico / amp_ref",
++    "(Amp central - anterior) / amp_ref",
++    "(Amp central - posterior) / amp_ref",
+     # Bloco 3 — Morfologia QRS [11-14]
+     "Largura QRS (s)",
+     "Upstroke QRS (s)",
+     "Downstroke QRS (s)",
+     "Assimetria QRS",
+     # Bloco 4 — Segmento pre-QRS [15-19]
+-    "Pre-QRS: mean - baseline",
+-    "Pre-QRS: std",
+-    "Pre-QRS: max (onda P?)",
++    "Pre-QRS: mean - baseline / amp_ref",
++    "Pre-QRS: std / amp_ref",
++    "Pre-QRS: max (onda P?) / amp_ref",
+     "Pre-QRS: skewness",
+     "Pre-QRS: kurtosis",
+     # Bloco 5 — Segmento pos-QRS [20-24]
+-    "Pos-QRS: mean - baseline",
+-    "Pos-QRS: std",
+-    "Pos-QRS: max (onda T?)",
++    "Pos-QRS: mean - baseline / amp_ref",
++    "Pos-QRS: std / amp_ref",
++    "Pos-QRS: max (onda T?) / amp_ref",
+     "Pos-QRS: skewness",
+     "Pos-QRS: kurtosis",
+     # Bloco 6 — Areas [25-27]
+-    "Area segmento pre",
+-    "Area segmento QRS",
+-    "Area segmento pos",
++    "Area segmento pre / amp_ref",
++    "Area segmento QRS / amp_ref",
++    "Area segmento pos / amp_ref",
+     # Bloco 7 — Variancia [28-30]
+-    "Variancia isoeletrica pre",
+-    "Variancia QRS",
+-    "Variancia isoeletrica pos",
++    "Variancia isoeletrica pre / amp_ref^2",
++    "Variancia QRS / amp_ref^2",
++    "Variancia isoeletrica pos / amp_ref^2",
+     # Bloco 8 — FFT do QRS [31-34]
+-    "FFT <5 Hz",
+-    "FFT 5-15 Hz",
+-    "FFT 15-40 Hz",
+-    "FFT >40 Hz",
++    "FFT <5 Hz / amp_ref",
++    "FFT 5-15 Hz / amp_ref",
++    "FFT 15-40 Hz / amp_ref",
++    "FFT >40 Hz / amp_ref",
+     # Bloco 9 — Wavelet do QRS [35-39]
+-    "Wavelet energia lv1 (detalhe)",
+-    "Wavelet energia lv2 (detalhe)",
+-    "Wavelet energia lv3 (detalhe)",
+-    "Wavelet energia lv4 (detalhe)",
+-    "Wavelet energia approx",
++    "Wavelet energia lv1 (detalhe) / amp_ref^2",
++    "Wavelet energia lv2 (detalhe) / amp_ref^2",
++    "Wavelet energia lv3 (detalhe) / amp_ref^2",
++    "Wavelet energia lv4 (detalhe) / amp_ref^2",
++    "Wavelet energia approx / amp_ref^2",
+     # Bloco 10 — Onda P [40-42]
+     "Onda P: presente (0 ou 1)",
+-    "Onda P: amplitude",
++    "Onda P: amplitude / amp_ref",
+     "Onda P: posicao relativa",
+     # Bloco 11 — Skew/Kurt por segmento [43-45]
+     "Skewness segmento pre",
+diff --git a/src/features/extract.py b/src/features/extract.py
+index a7028d867..f80d55bd5 100644
+--- a/src/features/extract.py
++++ b/src/features/extract.py
+@@ -29,6 +29,40 @@ from scipy.fft import rfft, rfftfreq
+ 
+ FS = 360  # frequência de amostragem em Hz
+ 
++# =============================================================================
++# NORMALIZAÇÃO POR PACIENTE
++# =============================================================================
++# Referências de cada registro geradas por src/data/prepare.py:
++#   rr_ref  (amostras) — mediana dos intervalos RR do paciente
++#   amp_ref (mV)       — mediana da amplitude pico-a-pico do QRS do paciente
++# Intervalos RR são divididos por rr_ref; tudo que está em mV é dividido por
++# amp_ref; variâncias e energias (mV²) por amp_ref². Assim as features
++# descrevem o batimento RELATIVO ao padrão do próprio paciente, em vez de
++# carregarem a "impressão digital" dele (frequência habitual, ganho do eletrodo).
++import json
++import os
++import re
++
++STATS_FILE = os.environ.get("RECORD_STATS_FILE", "data/processed/record_stats.json")
++_REC_PAT   = re.compile(r"_(\d{3})_labeled\.csv$|_src(\d{3})\.csv$")
++_stats_cache = None
++_AMP_MIN = 1e-3   # mV — proteção contra divisão por zero
++
++
++def record_stats(record):
++    global _stats_cache
++    if _stats_cache is None:
++        with open(STATS_FILE) as f:
++            _stats_cache = json.load(f)
++    return _stats_cache[record]
++
++
++def record_from_filename(path):
++    m = _REC_PAT.search(os.path.basename(path))
++    if m is None:
++        raise ValueError(f"Registro (paciente) não identificado no nome: {path}")
++    return m.group(1) or m.group(2)
++
+ 
+ def load_signal_with_structure(file_path):
+     df = pd.read_csv(file_path)
+@@ -51,6 +85,7 @@ def load_signal_with_structure(file_path):
+         'p_prev':    p_prev,
+         'p_central': p_central,
+         'p_next':    p_next,
++        'record':    record_from_filename(file_path),
+     }
+ 
+ 
+@@ -64,12 +99,17 @@ def extract_features(signal_data, fs=FS):
+     n = len(sig)
+     features = []
+ 
++    ref    = record_stats(signal_data['record'])
++    RR_REF = float(ref['rr_ref'])
++    A      = max(float(ref['amp_ref']), _AMP_MIN)
++
+     rr_pre  = float(samples[p_central] - samples[p_prev])
+     rr_post = float(samples[p_next]    - samples[p_central])
+     rr_mean = (rr_pre + rr_post) / 2.0
+ 
+-    features.append(rr_pre)
+-    features.append(rr_post)
++    # [0-1] RR relativo ao ritmo habitual do paciente (1.0 = típico; <1 = prematuro)
++    features.append(rr_pre  / RR_REF)
++    features.append(rr_post / RR_REF)
+     features.append(rr_post / (rr_pre + 1e-6))
+     features.append(rr_pre  / (rr_mean + 1e-6))
+     features.append(rr_post / (rr_mean + 1e-6))
+@@ -87,19 +127,22 @@ def extract_features(signal_data, fs=FS):
+     baseline      = (baseline_pre + baseline_post) / 2.0
+ 
+     amp_central_rel = amp_central - baseline
+-
+-    features.append(amp_prev)
+-    features.append(amp_central)
+-    features.append(amp_next)
+-    features.append(amp_central_rel)
+-    features.append(amp_central / (amp_prev   + 1e-6))
+-    features.append(amp_central / (amp_next   + 1e-6))
++    amp_prev_rel    = amp_prev    - baseline
++    amp_next_rel    = amp_next    - baseline
+ 
+     half_qrs = int(0.06 * fs)
+     qrs_start = max(0,   p_central - half_qrs)
+     qrs_end   = min(n-1, p_central + half_qrs)
+     qrs_seg   = sig[qrs_start : qrs_end + 1]
+ 
++    # [5-10] amplitudes sem o nível DC e relativas à amplitude típica do paciente
++    features.append(amp_prev_rel    / A)
++    features.append(amp_central_rel / A)
++    features.append(amp_next_rel    / A)
++    features.append(float(np.ptp(qrs_seg)) / A)               # QRS pico-a-pico relativo
++    features.append((amp_central_rel - amp_prev_rel) / A)     # central vs anterior
++    features.append((amp_central_rel - amp_next_rel) / A)     # central vs posterior
++
+     threshold = baseline + 0.5 * amp_central_rel
+     above     = np.where(qrs_seg > threshold)[0]
+     qrs_width = float(len(above)) / fs if len(above) > 0 else 0.0
+@@ -125,9 +168,9 @@ def extract_features(signal_data, fs=FS):
+     else:
+         pre_mean = pre_std = pre_max = pre_skew = pre_kurt = 0.0
+ 
+-    features.append(pre_mean  - baseline)
+-    features.append(pre_std)
+-    features.append(pre_max   - baseline)
++    features.append((pre_mean - baseline) / A)
++    features.append(pre_std / A)
++    features.append((pre_max  - baseline) / A)
+     features.append(pre_skew)
+     features.append(pre_kurt)
+ 
+@@ -142,9 +185,9 @@ def extract_features(signal_data, fs=FS):
+     else:
+         post_mean = post_std = post_max = post_skew = post_kurt = 0.0
+ 
+-    features.append(post_mean  - baseline)
+-    features.append(post_std)
+-    features.append(post_max   - baseline)
++    features.append((post_mean - baseline) / A)
++    features.append(post_std / A)
++    features.append((post_max  - baseline) / A)
+     features.append(post_skew)
+     features.append(post_kurt)
+ 
+@@ -153,20 +196,22 @@ def extract_features(signal_data, fs=FS):
+             return 0.0
+         return float(np.sum(seg - base)) / fs
+ 
+-    features.append(area_above_baseline(pre_seg,  baseline))
+-    features.append(area_above_baseline(qrs_seg,  baseline))
+-    features.append(area_above_baseline(post_seg, baseline))
++    features.append(area_above_baseline(pre_seg,  baseline) / A)
++    features.append(area_above_baseline(qrs_seg,  baseline) / A)
++    features.append(area_above_baseline(post_seg, baseline) / A)
+ 
+-    features.append(float(np.var(seg_iso_pre))  if len(seg_iso_pre)  > 5 else 0.0)
+-    features.append(float(np.var(qrs_seg)))
+-    features.append(float(np.var(seg_iso_post)) if len(seg_iso_post) > 5 else 0.0)
++    features.append((float(np.var(seg_iso_pre))  if len(seg_iso_pre)  > 5 else 0.0) / A**2)
++    features.append(float(np.var(qrs_seg)) / A**2)
++    features.append((float(np.var(seg_iso_post)) if len(seg_iso_post) > 5 else 0.0) / A**2)
+ 
+     win_size = int(0.25 * fs)
+     cen_start = max(0,   p_central - win_size)
+     cen_end   = min(n,   p_central + win_size)
+     cen_seg   = sig[cen_start : cen_end]
+ 
+-    yf = np.abs(rfft(cen_seg.astype(np.float64)))
++    # Sem o nível DC (baseline) e na escala do paciente: FFT ~ A, energia ~ A²
++    cen_norm = (cen_seg.astype(np.float64) - baseline) / A
++    yf = np.abs(rfft(cen_norm))
+     xf = rfftfreq(len(cen_seg), 1 / fs)
+ 
+     features.append(float(yf[(xf >= 0)  & (xf < 5)].sum()))
+@@ -174,15 +219,15 @@ def extract_features(signal_data, fs=FS):
+     features.append(float(yf[(xf >= 15) & (xf < 40)].sum()))
+     features.append(float(yf[(xf >= 40)].sum()))
+ 
+-    coeffs = pywt.wavedec(cen_seg.astype(np.float64), 'db4', level=4)
++    coeffs = pywt.wavedec(cen_norm, 'db4', level=4)
+     for c in coeffs:
+         features.append(float(np.sum(c ** 2)))
+ 
+     p_wave_window = sig[p_prev + margin : p_central - int(0.04 * fs)]
+ 
+     if len(p_wave_window) > 10:
+-        p_wave_max     = float(np.max(p_wave_window) - baseline)
+-        p_wave_present = 1.0 if p_wave_max > 0.05 else 0.0
++        p_wave_max     = float(np.max(p_wave_window) - baseline) / A
++        p_wave_present = 1.0 if p_wave_max > 0.05 else 0.0   # 5% da amplitude típica do QRS
+         local_max_idx  = int(np.argmax(p_wave_window))
+         p_wave_pos_rel = float(local_max_idx) / (len(p_wave_window) + 1e-6)
+     else:

@@ -86,6 +86,55 @@ print(type_counts.to_string())
 print()
 
 # =============================================================================
+# SÓ BATIMENTOS VIRAM PICOS
+# =============================================================================
+# Anotações que NÃO são batimentos (+ mudança de ritmo, ~ ruído, " comentário,
+# | artefato, x onda P não conduzida, [ ] início/fim de flutter ...) eram
+# tratadas como "pico vizinho", gerando intervalos RR errados. Elas passam a
+# ser 'NC' (amostra comum). Símbolos de batimento segundo a PhysioNet
+# ('/' já foi trocado por 'B'):
+SIMBOLOS_BATIMENTO = set("NLRBAaJSVFejEfQ!")
+
+nao_batimento = (df['type'] != 'NC') & (~df['type'].isin(SIMBOLOS_BATIMENTO))
+print(f"Anotações que não são batimentos (viram 'NC'): {int(nao_batimento.sum()):,}")
+print(df.loc[nao_batimento, 'type'].value_counts().to_string())
+df.loc[nao_batimento, 'type'] = 'NC'
+print()
+
+# =============================================================================
+# ESTATÍSTICAS POR PACIENTE (normalização inter-paciente)
+# =============================================================================
+# Features absolutas (RR em amostras, amplitudes em mV) funcionam como uma
+# "impressão digital" do paciente e não generalizam para pacientes novos.
+# Para cada registro calculamos referências robustas (medianas) que o
+# src/features/extract.py usa para normalizar as features:
+#   rr_ref  : mediana dos intervalos RR entre batimentos consecutivos (amostras)
+#   amp_ref : mediana da amplitude pico-a-pico do QRS (janela ±60 ms) em mV
+# Não usam rótulo de classe, só a posição dos batimentos — no ESP32, em modo
+# "grava e analisa", essas medianas são calculadas sobre o registro gravado.
+STATS_FILE   = "data/processed/record_stats.json"
+MEIA_JANELA_QRS = int(round(0.06 * 360))
+
+
+def estatisticas_registro(df_record):
+    samples = df_record['sample #'].to_numpy()
+    sig     = df_record['channel_0'].to_numpy(dtype=np.float64)
+    # posições (0..len-1) dos batimentos dentro do registro
+    pos     = np.flatnonzero(df_record['type'].to_numpy() != 'NC')
+    rr = np.diff(samples[pos])
+    rr = rr[rr > 0]
+    ptp = []
+    for p in pos:
+        ini, fim = max(0, p - MEIA_JANELA_QRS), min(len(sig), p + MEIA_JANELA_QRS + 1)
+        ptp.append(np.ptp(sig[ini:fim]))
+    return {
+        'rr_ref':    float(np.median(rr)),
+        'amp_ref':   float(np.median(ptp)),
+        'n_batidas': int(len(pos)),
+    }
+
+
+# =============================================================================
 # FUNÇÃO PRINCIPAL DE CORTE
 # =============================================================================
 
@@ -159,8 +208,11 @@ for cls in CLASSES_ALVO:
 records = df['record'].unique()
 print(f"Processando {len(records)} registros...\n")
 
+stats_por_registro = {}
+
 for rec_idx, record_name in enumerate(sorted(records)):
     df_record = df[df['record'] == record_name].copy()
+    stats_por_registro[str(record_name).split('_')[0]] = estatisticas_registro(df_record)
 
     batimentos = extrair_batimentos(df_record, record_name)
 
@@ -190,6 +242,17 @@ for rec_idx, record_name in enumerate(sorted(records)):
         total_salvo = sum(contadores.values())
         print(f"  [{rec_idx+1:3d}/{len(records)}] {record_name:<20s} "
               f"| salvo até agora: {total_salvo:,}")
+
+import json
+os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
+with open(STATS_FILE, "w") as f:
+    json.dump(stats_por_registro, f, indent=1, sort_keys=True)
+rr_refs  = [v['rr_ref']  for v in stats_por_registro.values()]
+amp_refs = [v['amp_ref'] for v in stats_por_registro.values()]
+print(f"\nEstatísticas por paciente salvas em {STATS_FILE}")
+print(f"  rr_ref : {min(rr_refs):.0f} a {max(rr_refs):.0f} amostras "
+      f"({60*360/max(rr_refs):.0f} a {60*360/min(rr_refs):.0f} bpm)")
+print(f"  amp_ref: {min(amp_refs):.2f} a {max(amp_refs):.2f} mV")
 
 # =============================================================================
 # RELATÓRIO FINAL

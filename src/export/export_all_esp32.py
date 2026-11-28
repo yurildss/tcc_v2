@@ -35,8 +35,6 @@ HEADERS_DIR    = "firmware/generated_headers"
 SPLIT_DIR      = "data/processed/split"
 BENCH_DIR      = "benchmark_resultados"
 KAN_STATE_PATH = os.path.join(HEADERS_DIR, "kan_best_state.pt")
-KAN_WIDTH_OCULTAS = [32, 16]      # igual a src/models/pipeline_kan.py
-KAN_GRID, KAN_K   = 5, 3
 AMOSTRAS_POR_CLASSE = 50          # dataset.h: 8 classes x 50 = 400 amostras
 
 
@@ -178,8 +176,6 @@ def exportar_xgboost(xgb_model, output_path, X_amostras, y_amostras):
 # EXECUÇÃO
 # =============================================================================
 def main():
-    from kan import KAN
-
     os.makedirs(HEADERS_DIR, exist_ok=True)
     encoder = joblib.load(os.path.join(HEADERS_DIR, "encoder.pkl"))
     scaler  = joblib.load(os.path.join(HEADERS_DIR, "scaler.pkl"))
@@ -194,8 +190,8 @@ def main():
 
     # ---- KAN (modelo principal do TCC: falha aqui interrompe o pipeline)
     titulo("Exportando KAN (B-splines numéricas, espelho exato do pykan)")
-    width = [X_test.shape[1]] + KAN_WIDTH_OCULTAS + [len(class_names)]
-    model = KAN(width=width, grid=KAN_GRID, k=KAN_K)
+    from src.models.kan_config import build_kan
+    model = build_kan(X_test.shape[1], len(class_names))
     model.load_state_dict(torch.load(KAN_STATE_PATH, map_location="cpu"))
     model.eval()
     export_kan_to_cpp(model, output_path=os.path.join(HEADERS_DIR, "kan_model.h"),

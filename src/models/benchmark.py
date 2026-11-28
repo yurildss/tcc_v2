@@ -233,7 +233,10 @@ def main():
     if HAS_KAN and os.path.exists(KAN_STATE_PATH):
         print("\n[KAN] A carregar modelo treinado...")
         try:
-            kan_model = KAN(width=[input_length, 32, 16, num_classes], grid=5, k=3)
+            # Modo rápido (model.speed()): mede a inferência do modelo em si,
+            # sem o custo extra do ramo simbólico e do salvamento de ativações
+            from src.models.kan_config import build_kan
+            kan_model = build_kan(input_length, num_classes)
             kan_model = kan_model.to(device)
             kan_model.load_state_dict(torch.load(KAN_STATE_PATH, map_location=device))
             kan_model.eval()

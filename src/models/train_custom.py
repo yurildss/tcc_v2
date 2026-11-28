@@ -8,7 +8,28 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
-from src.models.pipeline_kan import model, X_train_t, y_train_t, X_val_t, y_val_t, encoder, class_names, num_classes
+import joblib
+from src.models.kan_config import build_kan
+
+# Lê as features já extraídas e escalonadas pela etapa 5 (pipeline_kan.py).
+# Antes este script importava pipeline_kan, o que refazia a extração de
+# features de todos os ~113 mil batimentos uma segunda vez.
+SPLIT_DIR = "data/processed/split"
+encoder     = joblib.load("firmware/generated_headers/encoder.pkl")
+class_names = list(encoder.classes_)
+num_classes = len(class_names)
+
+def _carregar(nome):
+    X = torch.tensor(np.load(os.path.join(SPLIT_DIR, f"X_{nome}.npy")), dtype=torch.float32)
+    y = torch.tensor(np.load(os.path.join(SPLIT_DIR, f"y_{nome}.npy")), dtype=torch.long)
+    return X, y
+
+X_train_t, y_train_t = _carregar("train")
+X_val_t,   y_val_t   = _carregar("val")
+print(f"Treino: {tuple(X_train_t.shape)} | Validação: {tuple(X_val_t.shape)} | classes: {class_names}")
+
+torch.set_num_threads(os.cpu_count() or 1)
+model = build_kan(X_train_t.shape[1], num_classes)   # modo rápido (model.speed())
 
 # =============================================================================
 # HYPERPARAMS (kept as in original)
